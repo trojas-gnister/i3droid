@@ -28,7 +28,7 @@ pkg install git wget aapt dx ecj
 4. Clone the repository:
 
 ```
-git clone https://github.com/yourusername/i3droid
+git clone https://github.com/trojas-gnister/i3droid
 cd i3droid
 ```
 
