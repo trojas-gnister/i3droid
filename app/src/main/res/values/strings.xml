@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">i3 Tiling Manager</string>
+    <string name="accessibility_service_description">This service manages application windows in free form mode to provide an i3-like tiling window management experience.</string>
+    <string name="enable_freeform_mode">Enable Free Form Mode</string>
+    <string name="enable_accessibility_service">Enable Accessibility Service</string>
+    <string name="freeform_mode_description">Free form mode allows windows to be resized and positioned freely.</string>
+    <string name="accessibility_service_description_long">This service is required to manage windows and applications.</string>
+    <string name="setup_required">Setup Required</string>
+    <string name="setup_complete">Setup Complete</string>
+    <string name="main_workspace">Main</string>
+    <string name="work_workspace">Work</string>
+    <string name="social_workspace">Social</string>
+    <string name="productivity_workspace">Productivity</string>
+    <string name="settings">Settings</string>
+    <string name="launch_app">Launch App</string>
+    <string name="add_app">Add App</string>
+    <string name="empty_container">Empty Container</string>
+    <string name="auto_start_on_boot">Auto-start on boot</string>
+    <string name="show_window_borders">Show window borders</string>
+    <string name="window_gap">Window gap</string>
+    <string name="auto_tile_new_windows">Auto-tile new windows</string>
+</resources>
