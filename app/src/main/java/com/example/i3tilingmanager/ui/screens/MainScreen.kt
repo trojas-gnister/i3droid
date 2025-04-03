@@ -97,7 +97,7 @@ fun MainScreen() {
                     },
                     actions = {
                         IconButton(onClick = { showAppDrawer = true }) {
-                            Icon(Icons.Default.Apps, contentDescription = "Launch App")
+                            Icon(Icons.Default.List, contentDescription = "Launch App")
                         }
                     }
                 )
