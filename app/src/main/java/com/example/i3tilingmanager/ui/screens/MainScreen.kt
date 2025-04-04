@@ -1,353 +1,171 @@
-package com.example.i3tilingmanager.ui.screens
-
+import com.example.i3tilingmanager.viewmodel.MainViewModel
+import android.app.Application
+import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import android.provider.Settings
+import android.util.Log
+import androidx.compose.runtime.mutableStateOf
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.i3tilingmanager.I3TilingManagerApplication
-import com.example.i3tilingmanager.model.*
-import com.example.i3tilingmanager.util.AppUtil
+import com.example.i3tilingmanager.model.Workspace
+import com.example.i3tilingmanager.service.TilingManagerService
+import com.example.i3tilingmanager.util.AccessibilityUtil
+import com.example.i3tilingmanager.util.FreeformUtil
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun MainScreen() {
-    val context = LocalContext.current
-    val app = I3TilingManagerApplication.getInstance()
-    val tilingConfig = app.tilingConfiguration.value
-    
-    var currentWorkspace by remember { mutableStateOf(0) }
-    var showAppDrawer by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
-    
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    
-    // Cache installed apps
-    val installedApps = remember {
-        AppUtil.getInstalledApps(context.packageManager)
-    }
-    
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            ModalDrawerSheet {
-                Text(
-                    "Workspaces",
-                    modifier = Modifier.padding(16.dp),
-                    style = MaterialTheme.typography.titleLarge
-                )
-                Divider()
-                
-                // Workspace list
-                tilingConfig.workspaces.forEachIndexed { index, workspace ->
-                    NavigationDrawerItem(
-                        label = { Text(workspace.name) },
-                        selected = currentWorkspace == index,
-                        onClick = {
-                            currentWorkspace = index
-                            coroutineScope.launch {
-                                drawerState.close()
-                            }
-                        },
-                        modifier = Modifier.padding(horizontal = 12.dp)
-                    )
-                }
-                
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
-                
-                NavigationDrawerItem(
-                    label = { Text("Settings") },
-                    selected = false,
-                    onClick = {
-                        // Navigate to settings
-                        coroutineScope.launch {
-                            drawerState.close()
-                        }
-                    },
-                    modifier = Modifier.padding(horizontal = 12.dp)
-                )
-            }
-        }
-    ) {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text("i3 Tiling Manager") },
-                    navigationIcon = {
-                        IconButton(onClick = {
-                            coroutineScope.launch {
-                                drawerState.open()
-                            }
-                        }) {
-                            Icon(Icons.Default.Menu, contentDescription = "Menu")
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { showAppDrawer = true }) {
-                            Icon(Icons.Default.List, contentDescription = "Launch App")
-                        }
-                    }
-                )
-            },
-            floatingActionButton = {
-                FloatingActionButton(onClick = {
-                    // Add a new application to the current workspace
-                    showAppDrawer = true
-                }) {
-                    Icon(Icons.Default.Add, contentDescription = "Add App")
-                }
-            }
-        ) { padding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-            ) {
-                // Current workspace content
-                val workspace = tilingConfig.workspaces.getOrNull(currentWorkspace)
-                if (workspace != null) {
-                    WorkspaceContent(workspace)
-                }
-                
-                // App drawer
-                if (showAppDrawer) {
-                    AppDrawerDialog(
-                        installedApps = installedApps,
-                        onAppSelected = { packageName ->
-                            launchAppInFreeform(context, packageName, workspace)
-                            showAppDrawer = false
-                        },
-                        onDismiss = { showAppDrawer = false }
-                    )
-                }
-            }
+/**
+ * Enhanced ViewModel for the main activity with better state management.
+ */
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val TAG = "MainViewModel"
+
+    private val app = getApplication<I3TilingManagerApplication>()
+
+    // Track whether the accessibility service is enabled
+    val isAccessibilityServiceEnabled = mutableStateOf(false)
+
+    // Track whether freeform mode is enabled
+    val isFreeformEnabled = mutableStateOf(false)
+
+    // Current workspace flow
+    private val _currentWorkspace = MutableStateFlow(0)
+    val currentWorkspace: StateFlow<Int> = _currentWorkspace
+
+    // Status message for user feedback
+    private val _statusMessage = MutableStateFlow<String?>(null)
+    val statusMessage: StateFlow<String?> = _statusMessage
+
+    // Loading state
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    init {
+        // Initialize state
+        viewModelScope.launch {
+            checkServicesStatus()
         }
     }
-}
 
-@Composable
-fun WorkspaceContent(workspace: Workspace) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Display the tiling layout visualization
-        TilingLayoutVisualization(
-            layout = workspace.layout,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .padding(16.dp)
-        )
-        
-        // Display running apps in this workspace
-        RunningAppsBar(
-            apps = workspace.runningApps,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-        )
-    }
-}
+    /**
+     * Check if the accessibility service and freeform mode are enabled.
+     */
+    fun checkServicesStatus() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoading.value = true
 
-@Composable
-fun TilingLayoutVisualization(
-    layout: TilingLayout,
-    modifier: Modifier = Modifier
-) {
-    Box(modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
-        // This is a simplified visualization of the tiling layout
-        // In a real implementation, this would show the actual windows
-        when (layout) {
-            is HorizontalSplitLayout -> {
-                Row(modifier = Modifier.fillMaxSize()) {
-                    Box(
-                        modifier = Modifier
-                            .weight(layout.ratio)
-                            .fillMaxHeight()
-                            .background(MaterialTheme.colorScheme.primaryContainer)
-                            .padding(4.dp)
-                    ) {
-                        TilingLayoutVisualization(
-                            layout = layout.left,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .weight(1 - layout.ratio)
-                            .fillMaxHeight()
-                            .background(MaterialTheme.colorScheme.secondaryContainer)
-                            .padding(4.dp)
-                    ) {
-                        TilingLayoutVisualization(
-                            layout = layout.right,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-            }
-            is VerticalSplitLayout -> {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Box(
-                        modifier = Modifier
-                            .weight(layout.ratio)
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.primaryContainer)
-                            .padding(4.dp)
-                    ) {
-                        TilingLayoutVisualization(
-                            layout = layout.top,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .weight(1 - layout.ratio)
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.secondaryContainer)
-                            .padding(4.dp)
-                    ) {
-                        TilingLayoutVisualization(
-                            layout = layout.bottom,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-            }
-            is SingleAppLayout -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.tertiaryContainer)
-                ) {
-                    layout.appInfo?.let { appInfo ->
-                        Column(
-                            modifier = Modifier
-                                .align(Alignment.Center),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = appInfo.label ?: appInfo.packageName,
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        }
-                    } ?: run {
-                        Text(
-                            text = "Empty Container",
-                            modifier = Modifier.align(Alignment.Center),
-                            color = MaterialTheme.colorScheme.onTertiaryContainer
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun RunningAppsBar(
-    apps: List<AppInfo>,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        apps.forEach { app ->
-            Text(
-                text = app.label ?: app.packageName,
-                modifier = Modifier
-                    .background(MaterialTheme.colorScheme.primaryContainer)
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                fontSize = 14.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+            // Check accessibility service
+            val isServiceEnabled = AccessibilityUtil.isAccessibilityServiceEnabled(
+                getApplication(),
+                TilingManagerService::class.java
             )
-        }
-    }
-}
 
-@Composable
-fun AppDrawerDialog(
-    installedApps: List<AppInfo>,
-    onAppSelected: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Select an application") },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        },
-        text = {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(400.dp)
-            ) {
-                items(installedApps) { app ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onAppSelected(app.packageName) }
-                            .padding(vertical = 8.dp, horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        app.icon?.let {
-                            Icon(
-                                bitmap = it,
-                                contentDescription = null,
-                                modifier = Modifier.size(32.dp)
-                            )
-                        }
-                        
-                        Spacer(modifier = Modifier.width(16.dp))
-                        
-                        Text(
-                            text = app.label ?: app.packageName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+            // Check freeform mode
+            val isFreeform = FreeformUtil.isFreeformModeEnabled(getApplication())
+
+            withContext(Dispatchers.Main) {
+                isAccessibilityServiceEnabled.value = isServiceEnabled
+                isFreeformEnabled.value = isFreeform
+                app.isFreeformEnabled.value = isFreeform
+                _isLoading.value = false
+
+                if (isServiceEnabled && isFreeform) {
+                    _statusMessage.value = "I3 Tiling Manager is ready"
+                } else if (!isServiceEnabled && !isFreeform) {
+                    _statusMessage.value = "Accessibility service and freeform mode need to be enabled"
+                } else if (!isServiceEnabled) {
+                    _statusMessage.value = "Accessibility service needs to be enabled"
+                } else {
+                    _statusMessage.value = "Freeform mode needs to be enabled"
                 }
             }
         }
-    )
-}
+    }
 
-fun launchAppInFreeform(
-    context: android.content.Context,
-    packageName: String,
-    workspace: Workspace?
-) {
-    // Get the launch intent for the app
-    val packageManager = context.packageManager
-    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-    
-    // If we can't launch the app, do nothing
-    if (launchIntent == null) return
-    
-    // Set flags to open in a new window
-    launchIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK
-    
-    // Launch the app
-    context.startActivity(launchIntent)
+    /**
+     * Enable freeform mode on the device.
+     */
+    fun enableFreeformMode() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoading.value = true
+
+            val success = FreeformUtil.enableFreeformMode(getApplication())
+            val isFreeform = FreeformUtil.isFreeformModeEnabled(getApplication())
+
+            withContext(Dispatchers.Main) {
+                isFreeformEnabled.value = isFreeform
+                app.isFreeformEnabled.value = isFreeform
+
+                if (isFreeform) {
+                    _statusMessage.value = "Freeform mode enabled successfully"
+                } else {
+                    _statusMessage.value = if (success)
+                        "Please enable freeform mode in Developer Options"
+                    else
+                        "Failed to enable freeform mode automatically"
+                }
+
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Request the user to enable the accessibility service.
+     */
+    fun requestAccessibilityPermission(context: Context) {
+        AccessibilityUtil.launchAccessibilitySettings(context)
+        _statusMessage.value = "Please enable i3 Tiling Manager accessibility service"
+    }
+
+    /**
+     * Switch to a different workspace.
+     */
+    fun switchWorkspace(index: Int) {
+        val app = getApplication<I3TilingManagerApplication>()
+        val tilingConfig = app.tilingConfiguration.value
+
+        if (index >= 0 && index < tilingConfig.workspaces.size) {
+            // Update active workspace in the configuration
+            val updatedConfig = tilingConfig.copy(activeWorkspace = index)
+            app.tilingConfiguration.value = updatedConfig
+
+            // Update current workspace state
+            _currentWorkspace.value = index
+
+            // Log workspace switch
+            Log.d(TAG, "Switching to workspace: ${tilingConfig.workspaces[index].name} (index: $index)")
+
+            // If the service is running, notify it about the workspace change
+            if (isAccessibilityServiceEnabled.value) {
+                // This is a simplified approach - ideally we would use a bound service connection
+                val intent = Intent(getApplication(), TilingManagerService::class.java)
+                intent.action = "SWITCH_WORKSPACE"
+                intent.putExtra("workspace_index", index)
+                getApplication<Application>().startService(intent)
+
+                _statusMessage.value = "Switched to workspace: ${tilingConfig.workspaces[index].name}"
+            }
+        } else {
+            _statusMessage.value = "Invalid workspace index: $index"
+        }
+    }
+
+    /**
+     * Clear the status message.
+     */
+    fun clearStatusMessage() {
+        _statusMessage.value = null
+    }
+
+    /**
+     * Get a list of all workspaces.
+     */
+    fun getWorkspaces(): List<Workspace> {
+        return app.tilingConfiguration.value.workspaces
+    }
 }
