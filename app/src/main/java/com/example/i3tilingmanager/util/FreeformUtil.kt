@@ -244,6 +244,11 @@ object FreeformUtil {
 
             process.waitFor()
             output.toString()
+
+            val exitCode = process.waitFor() // Get exit code
+            val result = output.toString()
+            Log.d(TAG, "Executed shell command: '$command', ExitCode: $exitCode, Output: $result") // Log result
+            return result
         } catch (e: Exception) {
             Log.e(TAG, "Failed to execute shell command: $command", e)
             ""

@@ -91,42 +91,88 @@ class TilingManagerService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        Log.d(TAG, "TilingManagerService connected")
+        // **** ADDED LOG ****
+        Log.i(TAG, "onServiceConnected: Service is now connected to the system.")
 
         // Initialize the service
-        serviceScope.launch {
-            initService()
+        try { // Add try-catch for safety
+            // **** ADDED LOG ****
+            Log.d(TAG, "onServiceConnected: Launching initService coroutine...")
+            serviceScope.launch {
+                // **** ADDED LOG ****
+                Log.i(TAG, "onServiceConnected: Coroutine launched for initService.")
+                initService()
+            }
+        } catch (e: Exception) {
+            // **** ADDED LOG ****
+            Log.e(TAG, "onServiceConnected: Failed to launch initService coroutine", e)
         }
     }
 
     private suspend fun initService() {
-        // Check if free form mode is enabled
+        Log.i(TAG, "initService: Entered function.") // Existing log
+
+        Log.d(TAG, "Initializing service state...")
         if (!FreeformUtil.isFreeformModeEnabled(this)) {
-            Log.e(TAG, "Free form mode is not enabled")
+            Log.e(TAG, "Free form mode is not enabled, cannot initialize service properly.")
+            isRunning = false
+            return
+        }
+        Log.d(TAG, "initService: Freeform check passed.")
+
+        currentWorkspace = tilingConfig.activeWorkspace
+        Log.d(TAG, "initService: Set current workspace to $currentWorkspace")
+
+        withContext(Dispatchers.Main) {
+            Log.d(TAG, "initService: Scheduling initial layout application.")
+            delay(1500)
+            Log.i(TAG, "initService: Applying initial layout after delay.")
+
+            // **** ADDED LOG ****
+            Log.d(TAG, "initService: Calling updateWindowsList() before initial applyTilingLayout...")
+            updateWindowsList() // Get current windows
+
+            // **** ADDED LOG ****
+            Log.d(TAG, "initService: Calling applyTilingLayout() for initial layout...")
+            applyTilingLayout() // Apply layout
+        }
+        Log.i(TAG, "initService: Finished function.") // Existing log
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        Log.v(TAG, "onAccessibilityEvent: FUNCTION CALLED.") // Existing log
+
+        if (!isRunning) {
+            Log.d(TAG, "onAccessibilityEvent: Ignoring event - isRunning is false.")
+            return
+        }
+        if (event == null) {
+            Log.d(TAG, "onAccessibilityEvent: Ignoring event - event is null.")
             return
         }
 
-        // Apply initial tiling layout
-        withContext(Dispatchers.Main) {
-            // Initial delay to allow system to stabilize
-            delay(1000)
-            updateWindowsList()
-            applyTilingLayout()
-        }
-    }
-
-    override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        if (!isRunning) return
+        val eventTypeString = AccessibilityEvent.eventTypeToString(event.eventType)
+        val sourceClassName = event.source?.className?.toString() ?: "null"
+        Log.d(
+            TAG,
+            "onAccessibilityEvent received: $eventTypeString, pkg: ${event.packageName}, source: $sourceClassName"
+        ) // Existing log
 
         when (event.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // A window's state has changed (e.g., opened, closed, etc.)
-                handleWindowStateChanged(event)
-            }
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
-                // Windows have changed (e.g., moved, resized, etc.)
-                handleWindowsChanged()
+                // **** ADDED LOG ****
+                Log.v(TAG, "onAccessibilityEvent: Relevant event ($eventTypeString), scheduling window update.")
+                scheduleWindowUpdate() // Existing call
             }
+            else -> {
+                Log.v(TAG, "onAccessibilityEvent: Ignoring event type $eventTypeString") // Existing log
+            }
+        }
+        try {
+            event.recycle()
+        } catch (e: IllegalStateException) {
+            // Ignore.
         }
     }
 
@@ -238,6 +284,57 @@ class TilingManagerService : AccessibilityService() {
         windowInfoList.addAll(updatedList)
     }
 
+    private suspend fun updateWindowsAndApplyLayout() {
+        // **** ADDED LOG ****
+        Log.i(TAG, "updateWindowsAndApplyLayout: Entered function.") // Log entry
+
+        Log.d(TAG, "updateWindowsAndApplyLayout: Starting...") // Existing log
+        updateWindowsList()
+
+        val now = System.currentTimeMillis()
+        // **** ADDED LOG ****
+        Log.d(TAG, "updateWindowsAndApplyLayout: Checking if layout needed. Time since last: ${now - lastLayoutApplication}ms, Needs Repo: ${windowInfoList.any { it.needsRepositioning }}")
+        if (now - lastLayoutApplication > MIN_LAYOUT_INTERVAL &&
+            windowInfoList.any { it.needsRepositioning }) {
+            Log.i(TAG, "updateWindowsAndApplyLayout: Needs repositioning, applying layout.") // Existing log
+            withContext(Dispatchers.Main) {
+                // **** ADDED LOG ****
+                Log.d(TAG, "updateWindowsAndApplyLayout: Calling applyTilingLayout from debounced update.")
+                applyTilingLayout()
+            }
+        } else {
+            Log.d(TAG, "updateWindowsAndApplyLayout: No repositioning needed or too soon.") // Existing log
+        }
+
+        withContext(Dispatchers.Main) {
+            _activeWindows.value = windowInfoList.toList()
+        }
+        Log.d(TAG, "updateWindowsAndApplyLayout: Finished.") // Existing log
+    }
+
+    private val windowUpdateRunnable = Runnable {
+        // **** ADDED LOG ****
+        Log.i(TAG, "windowUpdateRunnable: EXECUTING runnable.") // Log execution start
+
+        Log.d(TAG, "Executing debounced/throttled window update.") // Existing log
+        try { // Add try-catch for safety
+            serviceScope.launch {
+                // **** ADDED LOG ****
+                Log.i(TAG, "windowUpdateRunnable: Coroutine launched for updateWindowsAndApplyLayout.")
+                updateWindowsAndApplyLayout()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "windowUpdateRunnable: Failed to launch update coroutine", e)
+        }
+    }
+
+    private fun scheduleWindowUpdate() {
+        // **** ADDED LOG ****
+        Log.d(TAG, "scheduleWindowUpdate: Posting runnable with delay ${WINDOW_UPDATE_DELAY_MS}ms")
+        mainHandler.removeCallbacks(windowUpdateRunnable) // Remove pending updates
+        mainHandler.postDelayed(windowUpdateRunnable, WINDOW_UPDATE_DELAY_MS) // Schedule new one
+    }
+
     private fun addAppToLayout(workspace: Workspace, appInfo: AppInfo) {
         // Find a suitable location for the app based on the workspace's layout
         val layout = workspace.layout
@@ -298,50 +395,87 @@ class TilingManagerService : AccessibilityService() {
     }
 
     private fun applyTilingLayout() {
-        // Record the time to prevent excessive layout applications
+        // **** ADDED LOG ****
+        Log.i(TAG, "<<< applyTilingLayout: Entered function for workspace $currentWorkspace >>>")
+
         lastLayoutApplication = System.currentTimeMillis()
 
-        // Apply the tiling layout to all windows in the current workspace
-        val workspace = tilingConfig.workspaces.getOrNull(currentWorkspace) ?: return
+        // **** ADDED LOG ****
+        Log.d(TAG, "applyTilingLayout: Getting workspace config...")
+        val workspace = tilingConfig.workspaces.getOrNull(currentWorkspace)
+        if (workspace == null) {
+            Log.e(TAG, "applyTilingLayout: Cannot apply layout, invalid workspace index: $currentWorkspace")
+            return
+        }
         val layout = workspace.layout
-        val screenBounds = FreeformUtil.getScreenBounds(this)
 
-        // Map window info to layout
-        val mappedWindows = mapWindowsToLayout(layout, windowInfoList, screenBounds)
+        // **** ADDED LOG ****
+        Log.d(TAG, "applyTilingLayout: Getting screen bounds...")
+        val screenBounds = FreeformUtil.getScreenBounds(this, forceRefresh = true) // Consider if forceRefresh is always needed
+        if (screenBounds.isEmpty) {
+            Log.e(TAG, "applyTilingLayout: Cannot apply layout, screen bounds are empty.")
+            return
+        }
+        Log.d(TAG, "applyTilingLayout: Screen bounds for layout: $screenBounds")
 
-        // Apply window gap if configured
+        // **** ADDED LOG ****
+        Log.d(TAG, "applyTilingLayout: Getting window list snapshot...")
+        val currentWindows = windowInfoList.toList()
+        if (currentWindows.isEmpty()){
+            Log.d(TAG, "applyTilingLayout: No windows found in current list to apply layout to.")
+            // Clear the target map if there are no windows?
+            packageToLayoutMap.clear()
+            return // Nothing to do if no windows
+        }
+        Log.d(TAG, "applyTilingLayout: Applying layout to ${currentWindows.size} windows.")
+
+        // **** ADDED LOG ****
+        Log.d(TAG, "applyTilingLayout: Mapping windows to layout...")
+        val mappedWindows = mapWindowsToLayout(layout, currentWindows, screenBounds)
+        Log.d(TAG, "applyTilingLayout: Mapped ${mappedWindows.size} windows to layout bounds.")
+        if (mappedWindows.isEmpty()) {
+            Log.w(TAG, "applyTilingLayout: Window list was not empty, but mapping resulted in zero windows.")
+            // This might indicate an issue in mapWindowsToLayout or window filtering
+            return
+        }
+
+
         val app = I3TilingManagerApplication.getInstance()
         val windowGap = app.appSettings.windowGap.value
+        Log.d(TAG, "applyTilingLayout: Using window gap: $windowGap")
 
-        // Apply new bounds to windows
+        packageToLayoutMap.clear()
+
+        // **** ADDED LOG ****
+        Log.d(TAG, "applyTilingLayout: Starting loop to resize windows...")
         for (windowMapping in mappedWindows) {
+            // ... (rest of the loop with existing logs for repositioning/resize calls) ...
             val window = windowMapping.windowInfo
-            var bounds = windowMapping.bounds
+            var targetBounds = Rect(windowMapping.bounds)
 
-            // Apply window gap if enabled
-            if (windowGap > 0) {
-                bounds = Rect(
-                    bounds.left + windowGap,
-                    bounds.top + windowGap,
-                    bounds.right - windowGap,
-                    bounds.bottom - windowGap
-                )
+            if (windowGap > 0 && targetBounds.width() > 2 * windowGap && targetBounds.height() > 2 * windowGap) {
+                targetBounds.inset(windowGap, windowGap)
             }
 
-            if (window.bounds != bounds) {
-                // The window needs repositioning
-                Log.d(TAG, "Repositioning window: ${window.packageName} to $bounds")
+            packageToLayoutMap[window.packageName] = targetBounds
 
-                // Store the expected bounds for this package
-                packageToLayoutMap[window.packageName] = bounds
+            if (window.bounds != targetBounds) {
+                Log.i(TAG, "Repositioning window: ${window.packageName} (ID: ${window.windowId}) from ${window.bounds} to $targetBounds") // Existing log
+                val resizeSuccess = FreeformUtil.resizeWindow(this, window.windowId, targetBounds) // Existing call
 
-                // Reposition the window using the FreeformUtil
-                FreeformUtil.resizeWindow(this, window.windowId, bounds)
-
-                // Mark this window as properly positioned
-                window.needsRepositioning = false
+                val windowInMainList = windowInfoList.find { it.windowId == window.windowId }
+                if (resizeSuccess) {
+                    windowInMainList?.needsRepositioning = false
+                } else {
+                    Log.e(TAG, "Failed to resize window: ${window.packageName} (ID: ${window.windowId})") // Existing log
+                    windowInMainList?.needsRepositioning = true
+                }
+            } else {
+                Log.v(TAG, "Window ${window.packageName} (ID: ${window.windowId}) already at target bounds $targetBounds.") // Existing log
+                windowInfoList.find { it.windowId == window.windowId }?.needsRepositioning = false
             }
         }
+        Log.i(TAG, "<<< applyTilingLayout: Finished function. >>>") // Existing log (modified slightly)
     }
 
     private fun mapWindowsToLayout(
