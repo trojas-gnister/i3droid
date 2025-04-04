@@ -158,11 +158,13 @@ object FreeformUtil {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val bounds = windowManager.currentWindowMetrics.bounds
                 cachedScreenBounds = Rect(bounds)
+                Log.d(TAG, "Using display with bounds: $cachedScreenBounds")
             } else {
                 val metrics = DisplayMetrics()
                 @Suppress("DEPRECATION")
                 windowManager.defaultDisplay.getMetrics(metrics)
                 cachedScreenBounds = Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
+                Log.d(TAG, "Using legacy method to get display bounds: $cachedScreenBounds")
             }
         }
 
@@ -170,7 +172,7 @@ object FreeformUtil {
     }
 
     /**
-     * Resize a window using the WindowManager API or shell commands if available.
+     * Resize a window using shell commands.
      *
      * @param context The context to use.
      * @param windowId The ID of the window to resize.
@@ -178,43 +180,49 @@ object FreeformUtil {
      * @return True if successful, false otherwise.
      */
     fun resizeWindow(context: Context, windowId: Int, bounds: Rect): Boolean {
-        // Try to use shell commands if we have the right permissions
-        if (hasShellPermission(context)) {
+        // Try to use shell commands
+        try {
+            // Use shell commands
+            val sizeCmd = "wm size-override $windowId ${bounds.width()} ${bounds.height()}"
+            val sizeResult = executeShellCommand(sizeCmd)
+
+            val posCmd = "wm position-override $windowId ${bounds.left} ${bounds.top}"
+            val posResult = executeShellCommand(posCmd)
+
+            Log.d(TAG, "Resized window $windowId to $bounds using shell commands")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to resize window using shell commands: ${e.message}")
+
+            // Try alternative method if the first one fails
             try {
-                val cmd = "wm size-override $windowId ${bounds.width()} ${bounds.height()}"
-                executeShellCommand(cmd)
+                // Check if we have WRITE_SECURE_SETTINGS permission
+                val hasWriteSecureSettings = Settings.System.canWrite(context)
+                if (hasWriteSecureSettings) {
+                    // Try another approach using settings
+                    val cmd = "settings put global force_desktop_mode_on_external_displays 1"
+                    executeShellCommand(cmd)
 
-                val posCmd = "wm position-override $windowId ${bounds.left} ${bounds.top}"
-                executeShellCommand(posCmd)
-
-                Log.d(TAG, "Resized window $windowId to $bounds using shell commands")
-                return true
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to resize window using shell commands: ${e.message}")
-                // Fall through to try other methods
+                    // Try to use accessibility actions as fallback
+                    return moveWindowWithAccessibility(context, windowId, bounds)
+                }
+            } catch (e2: Exception) {
+                Log.e(TAG, "Failed alternative window resize method: ${e2.message}")
             }
         }
 
-        // Try using the WindowManager API directly
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            try {
-                val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                // This part would ideally use the setWindowLayout API, but it's restricted
-                // Instead, we'd need to use reflection which is not reliable across Android versions
-                Log.d(TAG, "Attempted to resize window $windowId using WindowManager API")
-                false
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to resize window using WindowManager API: ${e.message}")
-                false
-            }
-        } else {
-            false
-        }
+        return false
+    }
+
+    private fun moveWindowWithAccessibility(context: Context, windowId: Int, bounds: Rect): Boolean {
+        // This is a fallback method that could use accessibility services
+        // For now, just notify the user this requires additional permissions
+        Log.d(TAG, "Window resizing requires additional permissions or root access")
+        return false
     }
 
     /**
      * Check if the app has shell command execution permission.
-     * This is typically only available through ADB or with root.
      */
     private fun hasShellPermission(context: Context): Boolean {
         return try {
@@ -228,7 +236,6 @@ object FreeformUtil {
 
     /**
      * Execute a shell command.
-     * This requires either ADB or root privileges.
      */
     @SuppressLint("PrivateApi")
     private fun executeShellCommand(command: String): String {
@@ -241,9 +248,6 @@ object FreeformUtil {
             while (reader.readLine().also { line = it } != null) {
                 output.append(line).append("\n")
             }
-
-            process.waitFor()
-            output.toString()
 
             val exitCode = process.waitFor() // Get exit code
             val result = output.toString()

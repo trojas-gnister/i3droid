@@ -185,10 +185,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Refresh the current layout.
      */
+    /**
+     * Refresh the current layout forcefully.
+     */
     fun refreshLayout() {
         // Use CommandManager to request a layout refresh
         CommandManager.refreshLayout(getApplication())
-        _statusMessage.value = "Refreshing window layout"
+        _statusMessage.value = "Forcefully refreshing window layout"
+
+        // The command is sent via broadcast and will be picked up by the service
+        Log.d(TAG, "Requested forceful layout refresh via CommandManager")
     }
 
     /**

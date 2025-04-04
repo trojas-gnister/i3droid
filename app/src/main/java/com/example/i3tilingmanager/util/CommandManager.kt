@@ -23,6 +23,7 @@ object CommandManager {
     const val EXTRA_WORKSPACE_INDEX = "workspace_index"
     const val EXTRA_WINDOW_PACKAGE = "window_package"
     const val EXTRA_WINDOW_ACTION = "window_action"
+    const val EXTRA_DISPLAY_ID = "display_id"
 
     // Window action types
     const val WINDOW_ACTION_MAXIMIZE = "maximize"
@@ -32,12 +33,13 @@ object CommandManager {
     /**
      * Send a command to switch to a different workspace.
      */
-    fun switchWorkspace(context: Context, workspaceIndex: Int) {
+    fun switchWorkspace(context: Context, workspaceIndex: Int, displayId: Int = 0) {
         val intent = Intent(ACTION_SWITCH_WORKSPACE)
         intent.putExtra(EXTRA_WORKSPACE_INDEX, workspaceIndex)
+        intent.putExtra(EXTRA_DISPLAY_ID, displayId)
         LocalBroadcastManager.getInstance(context).sendBroadcast(intent)
 
-        Log.d(TAG, "Broadcasting workspace switch command: $workspaceIndex")
+        Log.d(TAG, "Broadcasting workspace switch command: $workspaceIndex for display: $displayId")
     }
 
     /**

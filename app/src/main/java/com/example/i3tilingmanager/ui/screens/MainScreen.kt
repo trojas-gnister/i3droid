@@ -1,16 +1,25 @@
-import com.example.i3tilingmanager.viewmodel.MainViewModel
+package com.example.i3tilingmanager.ui.screens
+
 import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.util.Log
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.i3tilingmanager.I3TilingManagerApplication
 import com.example.i3tilingmanager.model.Workspace
 import com.example.i3tilingmanager.service.TilingManagerService
 import com.example.i3tilingmanager.util.AccessibilityUtil
+import com.example.i3tilingmanager.util.CommandManager
 import com.example.i3tilingmanager.util.FreeformUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -123,6 +132,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Refresh the current layout forcefully.
+     */
+    fun refreshLayout() {
+        // Use CommandManager to request a layout refresh
+        CommandManager.refreshLayout(getApplication())
+        _statusMessage.value = "Forcefully refreshing window layout"
+
+        // The command is sent via broadcast and will be picked up by the service
+        Log.d(TAG, "Requested forceful layout refresh via CommandManager")
+    }
+
+    /**
      * Switch to a different workspace.
      */
     fun switchWorkspace(index: Int) {
@@ -140,16 +161,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Log workspace switch
             Log.d(TAG, "Switching to workspace: ${tilingConfig.workspaces[index].name} (index: $index)")
 
-            // If the service is running, notify it about the workspace change
-            if (isAccessibilityServiceEnabled.value) {
-                // This is a simplified approach - ideally we would use a bound service connection
-                val intent = Intent(getApplication(), TilingManagerService::class.java)
-                intent.action = "SWITCH_WORKSPACE"
-                intent.putExtra("workspace_index", index)
-                getApplication<Application>().startService(intent)
+            // Use CommandManager to notify the service of the workspace change
+            CommandManager.switchWorkspace(getApplication(), index)
 
-                _statusMessage.value = "Switched to workspace: ${tilingConfig.workspaces[index].name}"
-            }
+            _statusMessage.value = "Switched to workspace: ${tilingConfig.workspaces[index].name}"
         } else {
             _statusMessage.value = "Invalid workspace index: $index"
         }
@@ -167,5 +182,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun getWorkspaces(): List<Workspace> {
         return app.tilingConfiguration.value.workspaces
+    }
+}
+
+/**
+ * Main screen composable that displays the tiling manager UI
+ */
+@Composable
+fun MainScreen(
+    viewModel: MainViewModel = viewModel()
+) {
+    val isAccessibilityServiceEnabled by viewModel.isAccessibilityServiceEnabled
+    val isFreeformEnabled by viewModel.isFreeformEnabled
+    val statusMessage by viewModel.statusMessage.collectAsState()
+    val context = LocalContext.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(text = "Accessibility Service Enabled: $isAccessibilityServiceEnabled")
+        Text(text = "Freeform Mode Enabled: $isFreeformEnabled")
+
+        statusMessage?.let {
+            Text(text = "Status: $it")
+        }
+
+        Button(
+            onClick = {
+                viewModel.refreshLayout()
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Force Apply Tiling")
+        }
+
+        Button(
+            onClick = {
+                val intent = Intent()
+                intent.action = "LAUNCH_APP_IN_FREEFORM"
+                intent.putExtra("package_name", "com.android.settings")
+                context.sendBroadcast(intent)
+            }
+        ) {
+            Text("Launch Settings in Freeform")
+        }
+
+        Button(
+            onClick = {
+                val intent = Intent()
+                intent.action = "LAUNCH_APP_IN_FREEFORM"
+                intent.putExtra("package_name", "com.google.android.calculator")
+                context.sendBroadcast(intent)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Launch Calculator in Freeform")
+        }
+
+        // Add a section to switch workspaces
+        Text(
+            text = "Workspaces",
+            style = MaterialTheme.typography.titleMedium
+        )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            for (i in 0 until 4) {
+                Button(
+                    onClick = { viewModel.switchWorkspace(i) }
+                ) {
+                    Text("Workspace ${i+1}")
+                }
+            }
+        }
     }
 }

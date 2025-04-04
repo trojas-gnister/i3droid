@@ -451,13 +451,32 @@ class TilingManagerService : AccessibilityService() {
         return Rect(rect.left, rect.top + height, rect.right, rect.bottom)
     }
 
-    private fun applyTilingLayout() {
-        // **** ADDED LOG ****
+    // Add this method to TilingManagerService.kt
+    fun refreshAllWindows() {
+        serviceScope.launch {
+            Log.d(TAG, "Manually refreshing all windows and layouts")
+
+            // Update windows list
+            updateWindowsList()
+
+            // Force reapplication of layout
+            withContext(Dispatchers.Main) {
+                applyTilingLayout(forceUpdate = true)
+            }
+
+            // Update UI with new window list
+            withContext(Dispatchers.Main) {
+                _activeWindows.value = windowInfoList.toList()
+            }
+        }
+    }
+
+    // Modify applyTilingLayout to accept a force parameter
+    private fun applyTilingLayout(forceUpdate: Boolean = false) {
         Log.i(TAG, "<<< applyTilingLayout: Entered function for workspace $currentWorkspace >>>")
 
         lastLayoutApplication = System.currentTimeMillis()
 
-        // **** ADDED LOG ****
         Log.d(TAG, "applyTilingLayout: Getting workspace config...")
         val workspace = tilingConfig.workspaces.getOrNull(currentWorkspace)
         if (workspace == null) {
@@ -466,47 +485,42 @@ class TilingManagerService : AccessibilityService() {
         }
         val layout = workspace.layout
 
-        // **** ADDED LOG ****
         Log.d(TAG, "applyTilingLayout: Getting screen bounds...")
-        val screenBounds = FreeformUtil.getScreenBounds(this, forceRefresh = true) // Consider if forceRefresh is always needed
+        val screenBounds = FreeformUtil.getScreenBounds(this, forceRefresh = true)
         if (screenBounds.isEmpty) {
             Log.e(TAG, "applyTilingLayout: Cannot apply layout, screen bounds are empty.")
             return
         }
         Log.d(TAG, "applyTilingLayout: Screen bounds for layout: $screenBounds")
 
-        // **** ADDED LOG ****
         Log.d(TAG, "applyTilingLayout: Getting window list snapshot...")
         val currentWindows = windowInfoList.toList()
-        if (currentWindows.isEmpty()){
+        if (currentWindows.isEmpty()) {
             Log.d(TAG, "applyTilingLayout: No windows found in current list to apply layout to.")
-            // Clear the target map if there are no windows?
             packageToLayoutMap.clear()
-            return // Nothing to do if no windows
+            return
         }
         Log.d(TAG, "applyTilingLayout: Applying layout to ${currentWindows.size} windows.")
 
-        // **** ADDED LOG ****
         Log.d(TAG, "applyTilingLayout: Mapping windows to layout...")
         val mappedWindows = mapWindowsToLayout(layout, currentWindows, screenBounds)
         Log.d(TAG, "applyTilingLayout: Mapped ${mappedWindows.size} windows to layout bounds.")
         if (mappedWindows.isEmpty()) {
             Log.w(TAG, "applyTilingLayout: Window list was not empty, but mapping resulted in zero windows.")
-            // This might indicate an issue in mapWindowsToLayout or window filtering
             return
         }
-
 
         val app = I3TilingManagerApplication.getInstance()
         val windowGap = app.appSettings.windowGap.value
         Log.d(TAG, "applyTilingLayout: Using window gap: $windowGap")
 
-        packageToLayoutMap.clear()
+        // Only clear the map if we're doing a full refresh
+        if (forceUpdate) {
+            packageToLayoutMap.clear()
+        }
 
-        // **** ADDED LOG ****
         Log.d(TAG, "applyTilingLayout: Starting loop to resize windows...")
         for (windowMapping in mappedWindows) {
-            // ... (rest of the loop with existing logs for repositioning/resize calls) ...
             val window = windowMapping.windowInfo
             var targetBounds = Rect(windowMapping.bounds)
 
@@ -516,23 +530,25 @@ class TilingManagerService : AccessibilityService() {
 
             packageToLayoutMap[window.packageName] = targetBounds
 
-            if (window.bounds != targetBounds) {
-                Log.i(TAG, "Repositioning window: ${window.packageName} (ID: ${window.windowId}) from ${window.bounds} to $targetBounds") // Existing log
-                val resizeSuccess = FreeformUtil.resizeWindow(this, window.windowId, targetBounds) // Existing call
+            // Only reposition if bounds changed or forcing update
+            if (forceUpdate || window.bounds != targetBounds) {
+                Log.i(TAG, "Repositioning window: ${window.packageName} (ID: ${window.windowId}) from ${window.bounds} to $targetBounds")
+                val resizeSuccess = FreeformUtil.resizeWindow(this, window.windowId, targetBounds)
 
                 val windowInMainList = windowInfoList.find { it.windowId == window.windowId }
                 if (resizeSuccess) {
                     windowInMainList?.needsRepositioning = false
+                    window.bounds = targetBounds  // Update the bounds in memory
                 } else {
-                    Log.e(TAG, "Failed to resize window: ${window.packageName} (ID: ${window.windowId})") // Existing log
+                    Log.e(TAG, "Failed to resize window: ${window.packageName} (ID: ${window.windowId})")
                     windowInMainList?.needsRepositioning = true
                 }
             } else {
-                Log.v(TAG, "Window ${window.packageName} (ID: ${window.windowId}) already at target bounds $targetBounds.") // Existing log
+                Log.v(TAG, "Window ${window.packageName} (ID: ${window.windowId}) already at target bounds $targetBounds.")
                 windowInfoList.find { it.windowId == window.windowId }?.needsRepositioning = false
             }
         }
-        Log.i(TAG, "<<< applyTilingLayout: Finished function. >>>") // Existing log (modified slightly)
+        Log.i(TAG, "<<< applyTilingLayout: Finished function. >>>")
     }
 
     private fun mapWindowsToLayout(
@@ -574,6 +590,26 @@ class TilingManagerService : AccessibilityService() {
         }
 
         return result
+    }
+
+    // Add to TilingManagerService.kt
+    private fun fixWindowFocus() {
+        try {
+            // Try to clear focus first
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            Thread.sleep(100) // Small delay
+
+            // Now focus the window we want
+            windows?.forEach { windowInfo ->
+                if (windowInfo.isFocused && windowInfo.root?.packageName.toString() != "com.example.i3tilingmanager") {
+                    windowInfo.root?.refresh()
+                    windowInfo.root?.performAction(ACTION_FOCUS)
+                    return@forEach
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fixing window focus: ${e.message}")
+        }
     }
 
     private fun handleWindowAction(packageName: String, action: String) {
