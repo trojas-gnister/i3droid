@@ -5,9 +5,11 @@ import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS
 import android.accessibilityservice.AccessibilityService
+import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -57,6 +59,7 @@ class TilingManagerService : AccessibilityService() {
     private var workspaceSwitchReceiver: BroadcastReceiver? = null
     private var layoutRefreshReceiver: BroadcastReceiver? = null
     private var windowActionReceiver: BroadcastReceiver? = null
+    private var launchAppReceiver: BroadcastReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -84,6 +87,18 @@ class TilingManagerService : AccessibilityService() {
         windowActionReceiver = CommandManager.registerForWindowActionCommands(this) { packageName, action ->
             handleWindowAction(packageName, action)
         }
+
+        // Register for app launch commands
+        launchAppReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == "LAUNCH_APP_IN_FREEFORM") {
+                    val pkgName = intent.getStringExtra("package_name") ?: return
+                    launchAppInFreeform(pkgName)
+                }
+            }
+        }
+        val intentFilter = IntentFilter("LAUNCH_APP_IN_FREEFORM")
+        registerReceiver(launchAppReceiver, intentFilter, RECEIVER_NOT_EXPORTED)
 
         // Start monitoring windows
         isRunning = true
@@ -180,7 +195,7 @@ class TilingManagerService : AccessibilityService() {
         val packageName = event.packageName?.toString() ?: return
 
         // Skip our own app windows
-        if (packageName == packageName) return
+        if (packageName == "com.example.i3tilingmanager") return
 
         // Use IO dispatcher for background processing
         serviceScope.launch(Dispatchers.IO) {
@@ -241,22 +256,32 @@ class TilingManagerService : AccessibilityService() {
     private fun updateWindowsList() {
         val windows = windows?.filterNotNull() ?: return
 
+        // Add debug log to see all windows before filtering
+        Log.d(TAG, "Found ${windows.size} total windows")
+
         // Update our window info list
         val updatedList = mutableListOf<WindowInfo>()
 
         for (window in windows) {
-            if (!window.isActive) continue
+            // REMOVE the isActive check - Windows seem to always report inactive
+            // if (!window.isActive) continue
 
             val packageName = window.root?.packageName?.toString() ?: continue
 
-            // Skip system windows and our own app
-            if (packageName == "android" || packageName == packageName ||
-                packageName == "com.android.systemui") {
+            // Skip system windows and our own app (using correct package name)
+            if (packageName == "android" ||
+                packageName == "com.example.i3tilingmanager" ||
+                packageName == "com.android.systemui" ||
+                packageName == "com.google.android.apps.nexuslauncher") {
+
+                Log.d(TAG, "Skipping system window/own app: $packageName")
                 continue
             }
 
             val bounds = Rect()
             window.getBoundsInScreen(bounds)
+
+            Log.d(TAG, "Processing window for management: $packageName, bounds=$bounds")
 
             // Check if this window is already in our list
             val existingWindow = windowInfoList.find { it.packageName == packageName }
@@ -267,6 +292,7 @@ class TilingManagerService : AccessibilityService() {
                 existingWindow.bounds = bounds
                 existingWindow.needsRepositioning = needsRepositioning
                 updatedList.add(existingWindow)
+                Log.d(TAG, "Updated window: $packageName, needs repositioning: $needsRepositioning")
             } else {
                 // Add new window info
                 updatedList.add(
@@ -277,11 +303,13 @@ class TilingManagerService : AccessibilityService() {
                         needsRepositioning = true
                     )
                 )
+                Log.d(TAG, "Added new window: $packageName")
             }
         }
 
         windowInfoList.clear()
         windowInfoList.addAll(updatedList)
+        Log.d(TAG, "Window list updated, total managed windows: ${windowInfoList.size}")
     }
 
     private suspend fun updateWindowsAndApplyLayout() {
@@ -347,6 +375,35 @@ class TilingManagerService : AccessibilityService() {
         if (bounds != null) {
             packageToLayoutMap[appInfo.packageName] = bounds
             FreeformUtil.launchAppInFreeform(this, appInfo.packageName, bounds)
+        }
+    }
+
+    /**
+     * Launch an app in freeform mode for testing
+     */
+    fun launchAppInFreeform(packageName: String) {
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+        if (intent != null) {
+            // Important: Set the right flags for freeform mode
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
+                    Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+
+            Log.d(TAG, "Launching app in freeform: $packageName")
+
+            // On Android 10+, we can specify bounds directly
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val screenBounds = FreeformUtil.getScreenBounds(this)
+                val options = ActivityOptions.makeBasic()
+                options.launchBounds = Rect(0, 100, screenBounds.width() / 2, screenBounds.height() / 2)
+                startActivity(intent, options.toBundle())
+                Log.d(TAG, "Launched $packageName in freeform with bounds")
+            } else {
+                startActivity(intent)
+                Log.d(TAG, "Launched $packageName without bounds (older Android)")
+            }
+        } else {
+            Log.e(TAG, "Could not find launch intent for package: $packageName")
         }
     }
 
@@ -561,21 +618,21 @@ class TilingManagerService : AccessibilityService() {
         super.onDestroy()
         Log.d(TAG, "TilingManagerService destroyed")
 
-        // In the onCreate method, change these lines
-        workspaceSwitchReceiver = CommandManager.registerForWorkspaceSwitchCommands(this) { index ->
-            switchWorkspace(index)
+        // Unregister all receivers
+        if (workspaceSwitchReceiver != null) {
+            CommandManager.unregisterReceiver(this, workspaceSwitchReceiver!!)
         }
 
-        layoutRefreshReceiver = CommandManager.registerForLayoutRefreshCommands(this) {
-            serviceScope.launch {
-                withContext(Dispatchers.Main) {
-                    applyTilingLayout()
-                }
-            }
+        if (layoutRefreshReceiver != null) {
+            CommandManager.unregisterReceiver(this, layoutRefreshReceiver!!)
         }
 
-        windowActionReceiver = CommandManager.registerForWindowActionCommands(this) { packageName, action ->
-            handleWindowAction(packageName, action)
+        if (windowActionReceiver != null) {
+            CommandManager.unregisterReceiver(this, windowActionReceiver!!)
+        }
+
+        if (launchAppReceiver != null) {
+            unregisterReceiver(launchAppReceiver)
         }
 
         isRunning = false
@@ -626,5 +683,7 @@ class TilingManagerService : AccessibilityService() {
 
     companion object {
         private val AccessibilityNodeInfo = android.view.accessibility.AccessibilityNodeInfo::class.java
+        const val WINDOW_UPDATE_DELAY_MS = 500L // Delay in milliseconds for window updates
+        const val DEBUG_WINDOW_DETECTION = true // Flag for extra logging
     }
 }

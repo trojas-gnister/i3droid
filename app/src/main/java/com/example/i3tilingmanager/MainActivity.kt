@@ -18,6 +18,7 @@ import com.example.i3tilingmanager.service.TilingManagerService
 import com.example.i3tilingmanager.ui.screens.MainScreen
 import com.example.i3tilingmanager.ui.theme.I3TilingManagerTheme
 import com.example.i3tilingmanager.util.AccessibilityUtil
+import com.example.i3tilingmanager.util.CommandManager
 import com.example.i3tilingmanager.util.FreeformUtil
 import com.example.i3tilingmanager.viewmodel.MainViewModel
 
@@ -59,8 +60,15 @@ fun MainContent(
     onEnableFreeform: () -> Unit,
     onStartService: () -> Unit
 ) {
+
     val context = LocalContext.current
-    
+    Button(
+        onClick = {
+            CommandManager.refreshLayout(context)
+        }
+    ) {
+        Text("Force Apply Tiling")
+    }
     if (!isFreeformEnabled || !isAccessibilityEnabled) {
         SetupScreen(
             isFreeformEnabled = isFreeformEnabled,
