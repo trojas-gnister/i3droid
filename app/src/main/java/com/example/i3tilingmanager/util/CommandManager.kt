@@ -69,13 +69,14 @@ object CommandManager {
      */
     fun registerForWorkspaceSwitchCommands(
         context: Context,
-        callback: (Int) -> Unit
+        callback: (Int, Int) -> Unit  // workspace index, display ID
     ): BroadcastReceiver {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (intent.action == ACTION_SWITCH_WORKSPACE) {
                     val index = intent.getIntExtra(EXTRA_WORKSPACE_INDEX, 0)
-                    callback(index)
+                    val displayId = intent.getIntExtra(EXTRA_DISPLAY_ID, 0)
+                    callback(index, displayId)
                 }
             }
         }

@@ -16,6 +16,8 @@ import android.view.WindowManager
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.lang.reflect.Method
+import android.hardware.display.DisplayManager
+
 
 /**
  * Utility class for free form mode related operations with enhanced capabilities.
@@ -151,24 +153,30 @@ object FreeformUtil {
      * @param forceRefresh Force a refresh of the cached bounds.
      * @return The screen bounds.
      */
-    fun getScreenBounds(context: Context, forceRefresh: Boolean = false): Rect {
-        if (cachedScreenBounds == null || forceRefresh) {
-            val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    fun getScreenBounds(context: Context, displayId: Int = 0, forceRefresh: Boolean = false): Rect {
+        val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val displays = displayManager.displays
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val bounds = windowManager.currentWindowMetrics.bounds
-                cachedScreenBounds = Rect(bounds)
-                Log.d(TAG, "Using display with bounds: $cachedScreenBounds")
-            } else {
-                val metrics = DisplayMetrics()
-                @Suppress("DEPRECATION")
-                windowManager.defaultDisplay.getMetrics(metrics)
-                cachedScreenBounds = Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
-                Log.d(TAG, "Using legacy method to get display bounds: $cachedScreenBounds")
-            }
+        // Find the requested display or use the default if not found
+        val display = displays.find { it.displayId == displayId } ?: displays.firstOrNull()
+
+        if (display == null) {
+            Log.e(TAG, "No displays found!")
+            return Rect(0, 0, 1000, 1000) // Fallback
         }
 
-        return Rect(cachedScreenBounds)
+        val bounds = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            wm.currentWindowMetrics.bounds
+        } else {
+            val metrics = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            display.getMetrics(metrics)
+            Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
+        }
+
+        Log.d(TAG, "Using display ${display.displayId} with bounds: $bounds")
+        return bounds
     }
 
     /**

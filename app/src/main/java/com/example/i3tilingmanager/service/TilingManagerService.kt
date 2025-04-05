@@ -22,6 +22,12 @@ import com.example.i3tilingmanager.util.AppUtil
 import com.example.i3tilingmanager.util.CommandManager
 import com.example.i3tilingmanager.util.FreeformUtil
 import kotlinx.coroutines.*
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.hardware.display.DisplayManager
+import androidx.core.app.NotificationCompat
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
+
 
 /**
  * Accessibility service that manages the tiling of windows in free form mode.
@@ -30,6 +36,11 @@ import kotlinx.coroutines.*
 class TilingManagerService : AccessibilityService() {
     private val TAG = "TilingManagerService"
 
+    private val workspacesByDisplay = mutableMapOf<Int, Int>().apply {
+        // Default workspace 0 for all displays
+        this[0] = 0  // Display 0 -> Workspace 0
+        this[2] = 0  // Display 2 -> Workspace 0
+    }
     // Use Dispatchers.IO for background operations
     private val serviceScope = CoroutineScope(Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -61,10 +72,44 @@ class TilingManagerService : AccessibilityService() {
     private var windowActionReceiver: BroadcastReceiver? = null
     private var launchAppReceiver: BroadcastReceiver? = null
 
+
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "TilingManagerService created")
+// Register in onCreate()
+        val debugReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == "DEBUG_WINDOWS") {
+                    val debugInfo = debugLogAllWindows()
+                    // Show this info in a notification or send it back to the UI
+                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
+                    // Create notification channel if needed
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        val channel = NotificationChannel(
+                            "debug_channel",
+                            "Debug Information",
+                            NotificationManager.IMPORTANCE_DEFAULT
+                        )
+                        notificationManager.createNotificationChannel(channel)
+                    }
+
+                    val notification = NotificationCompat.Builder(this@TilingManagerService, "debug_channel")
+                        .setSmallIcon(android.R.drawable.ic_dialog_info)
+                        .setContentTitle("Window Debug Info")
+                        .setContentText("Total windows: ${windowInfoList.size}")
+                        .setStyle(NotificationCompat.BigTextStyle().bigText(debugInfo))
+                        .build()
+
+                    notificationManager.notify(1, notification)
+                }
+            }
+        }
+        LocalBroadcastManager.getInstance(this).registerReceiver(
+            debugReceiver,
+            IntentFilter("DEBUG_WINDOWS")
+        )
         // Get application instance and config
         val app = I3TilingManagerApplication.getInstance()
         tilingConfig = app.tilingConfiguration.value
@@ -252,7 +297,7 @@ class TilingManagerService : AccessibilityService() {
             }
         }
     }
-
+    // Update the updateWindowsList() method in TilingManagerService.kt
     private fun updateWindowsList() {
         val windows = windows?.filterNotNull() ?: return
 
@@ -261,27 +306,48 @@ class TilingManagerService : AccessibilityService() {
 
         // Update our window info list
         val updatedList = mutableListOf<WindowInfo>()
+        val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val displays = displayManager.displays
+
+        Log.d(TAG, "Detected ${displays.size} displays")
+        for (display in displays) {
+            Log.d(TAG, "Display ${display.displayId}: ${display.name}")
+        }
+
+        // VERY IMPORTANT: Dump all window information for debugging
+        Log.d(TAG, "=== ALL WINDOW INFO (PRE-FILTER) ===")
+        windows.forEachIndexed { index, accessibilityWindowInfo ->
+            val pkg = accessibilityWindowInfo.root?.packageName?.toString() ?: "null"
+            val title = accessibilityWindowInfo.title?.toString() ?: "null"
+            val displayId = accessibilityWindowInfo.displayId
+            val bounds = Rect()
+            accessibilityWindowInfo.getBoundsInScreen(bounds)
+            Log.d(TAG, "Window[$index]: pkg=$pkg, title=$title, display=$displayId, bounds=$bounds")
+        }
+
+        // Only skip a very minimal set of system packages
+        val systemPackagesToSkip = setOf(
+            "com.android.systemui",
+            "com.example.i3tilingmanager"
+        )
 
         for (window in windows) {
-            // REMOVE the isActive check - Windows seem to always report inactive
-            // if (!window.isActive) continue
-
             val packageName = window.root?.packageName?.toString() ?: continue
+            val title = window.title?.toString() ?: "No Title"
 
-            // Skip system windows and our own app (using correct package name)
-            if (packageName == "android" ||
-                packageName == "com.example.i3tilingmanager" ||
-                packageName == "com.android.systemui" ||
-                packageName == "com.google.android.apps.nexuslauncher") {
-
+            // More permissive filtering
+            if (packageName in systemPackagesToSkip) {
                 Log.d(TAG, "Skipping system window/own app: $packageName")
                 continue
             }
 
+            // Get the display ID for this window
+            val displayId = window.displayId
+
+            Log.d(TAG, "Processing window for management: $packageName (Title: $title, Display: $displayId)")
+
             val bounds = Rect()
             window.getBoundsInScreen(bounds)
-
-            Log.d(TAG, "Processing window for management: $packageName, bounds=$bounds")
 
             // Check if this window is already in our list
             val existingWindow = windowInfoList.find { it.packageName == packageName }
@@ -291,6 +357,8 @@ class TilingManagerService : AccessibilityService() {
                 val needsRepositioning = existingWindow.bounds != bounds
                 existingWindow.bounds = bounds
                 existingWindow.needsRepositioning = needsRepositioning
+                existingWindow.displayId = displayId
+                existingWindow.title = title
                 updatedList.add(existingWindow)
                 Log.d(TAG, "Updated window: $packageName, needs repositioning: $needsRepositioning")
             } else {
@@ -300,7 +368,9 @@ class TilingManagerService : AccessibilityService() {
                         packageName = packageName,
                         bounds = bounds,
                         windowId = window.id,
-                        needsRepositioning = true
+                        displayId = displayId,
+                        needsRepositioning = true,
+                        title = title
                     )
                 )
                 Log.d(TAG, "Added new window: $packageName")
@@ -471,22 +541,27 @@ class TilingManagerService : AccessibilityService() {
         }
     }
 
-    // Modify applyTilingLayout to accept a force parameter
-    private fun applyTilingLayout(forceUpdate: Boolean = false) {
-        Log.i(TAG, "<<< applyTilingLayout: Entered function for workspace $currentWorkspace >>>")
+    private fun applyTilingLayout(forceUpdate: Boolean = false, displayId: Int = 0) {
+        Log.i(TAG, "<<< applyTilingLayout: Entered function for workspace $currentWorkspace on display $displayId >>>")
+
+        lastLayoutApplication = System.currentTimeMillis()
+
+        val workspaceIndex = workspacesByDisplay[displayId] ?: 0
+
+        Log.i(TAG, "<<< applyTilingLayout: Entered function for workspace $workspaceIndex on display $displayId >>>")
 
         lastLayoutApplication = System.currentTimeMillis()
 
         Log.d(TAG, "applyTilingLayout: Getting workspace config...")
-        val workspace = tilingConfig.workspaces.getOrNull(currentWorkspace)
+        val workspace = tilingConfig.workspaces.getOrNull(workspaceIndex)
         if (workspace == null) {
-            Log.e(TAG, "applyTilingLayout: Cannot apply layout, invalid workspace index: $currentWorkspace")
+            Log.e(TAG, "applyTilingLayout: Cannot apply layout, invalid workspace index: $workspaceIndex")
             return
         }
         val layout = workspace.layout
 
         Log.d(TAG, "applyTilingLayout: Getting screen bounds...")
-        val screenBounds = FreeformUtil.getScreenBounds(this, forceRefresh = true)
+        val screenBounds = FreeformUtil.getScreenBounds(this, displayId, forceRefresh = true)
         if (screenBounds.isEmpty) {
             Log.e(TAG, "applyTilingLayout: Cannot apply layout, screen bounds are empty.")
             return
@@ -494,13 +569,16 @@ class TilingManagerService : AccessibilityService() {
         Log.d(TAG, "applyTilingLayout: Screen bounds for layout: $screenBounds")
 
         Log.d(TAG, "applyTilingLayout: Getting window list snapshot...")
-        val currentWindows = windowInfoList.toList()
+        // Filter windows for the current display
+        val currentWindows = windowInfoList.filter { it.displayId == displayId }
+
         if (currentWindows.isEmpty()) {
-            Log.d(TAG, "applyTilingLayout: No windows found in current list to apply layout to.")
+            Log.d(TAG, "applyTilingLayout: No windows found for display $displayId to apply layout to.")
+            // Try to launch default app for this workspace if configured
+            tryLaunchDefaultApps(workspace, screenBounds, displayId)
             packageToLayoutMap.clear()
             return
         }
-        Log.d(TAG, "applyTilingLayout: Applying layout to ${currentWindows.size} windows.")
 
         Log.d(TAG, "applyTilingLayout: Mapping windows to layout...")
         val mappedWindows = mapWindowsToLayout(layout, currentWindows, screenBounds)
@@ -549,6 +627,44 @@ class TilingManagerService : AccessibilityService() {
             }
         }
         Log.i(TAG, "<<< applyTilingLayout: Finished function. >>>")
+    }
+
+    // Helper method to launch default apps for a workspace
+    private fun tryLaunchDefaultApps(workspace: Workspace, screenBounds: Rect, displayId: Int) {
+        // Example implementation - you'd need to configure default apps per workspace in your model
+        val defaultApps = when (workspace.id) {
+            0 -> listOf("com.android.settings", "com.google.android.calculator")
+            1 -> listOf("com.google.android.apps.docs", "com.google.android.calendar")
+            2 -> listOf("com.google.android.apps.messaging", "com.google.android.gm")
+            else -> emptyList()
+        }
+
+        if (defaultApps.isNotEmpty()) {
+            Log.d(TAG, "Trying to launch default apps for workspace ${workspace.name}: $defaultApps")
+            for (app in defaultApps) {
+                // Calculate position based on index and total
+                val index = defaultApps.indexOf(app)
+                val total = defaultApps.size
+                val appBounds = calculateDefaultBounds(screenBounds, index, total)
+                FreeformUtil.launchAppInFreeform(this, app, appBounds)
+            }
+        }
+    }
+
+    private fun calculateDefaultBounds(screenBounds: Rect, index: Int, total: Int): Rect {
+        // Simple implementation for 1 or 2 apps
+        return when {
+            total == 1 -> Rect(screenBounds) // Full screen
+            total == 2 && index == 0 -> Rect(
+                screenBounds.left, screenBounds.top,
+                screenBounds.left + screenBounds.width() / 2, screenBounds.bottom
+            ) // Left half
+            total == 2 && index == 1 -> Rect(
+                screenBounds.left + screenBounds.width() / 2, screenBounds.top,
+                screenBounds.right, screenBounds.bottom
+            ) // Right half
+            else -> Rect(screenBounds) // Default to full screen
+        }
     }
 
     private fun mapWindowsToLayout(
@@ -678,26 +794,109 @@ class TilingManagerService : AccessibilityService() {
     /**
      * Switch to a different workspace.
      */
-    fun switchWorkspace(index: Int) {
+    fun switchWorkspace(index: Int, displayId: Int = 0) {
         if (index < 0 || index >= tilingConfig.workspaces.size) {
             Log.e(TAG, "Invalid workspace index: $index")
             return
         }
 
-        Log.d(TAG, "Switching to workspace: $index")
-        currentWorkspace = index
+        Log.d(TAG, "Switching to workspace: $index for display: $displayId")
+        workspacesByDisplay[displayId] = index
 
-        // Apply the new workspace layout
+        // Apply the new workspace layout for the specific display
         serviceScope.launch {
-            // Clear the package-to-layout map for the new workspace
-            packageToLayoutMap.clear()
+            // Clear the package-to-layout map for the new workspace on this display
+            val displaySpecificPackages = packageToLayoutMap.filterKeys {
+                windowInfoList.find { info -> info.packageName == it }?.displayId == displayId
+            }.keys
+
+            for (pkg in displaySpecificPackages) {
+                packageToLayoutMap.remove(pkg)
+            }
 
             // Apply the tiling layout for the new workspace
             withContext(Dispatchers.Main) {
-                applyTilingLayout()
+                applyTilingLayout(forceUpdate = true, displayId = displayId)
             }
         }
     }
+
+    fun debugLogAllWindows(): String {
+        val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val sb = StringBuilder()
+
+        sb.appendLine("=== Window Debug Information ===")
+        sb.appendLine("Total managed windows: ${windowInfoList.size}")
+
+        // Group windows by display
+        val windowsByDisplay = windowInfoList.groupBy { it.displayId }
+
+        for (display in displayManager.displays) {
+            sb.appendLine("\nDisplay ${display.displayId}: ${display.name}")
+            sb.appendLine("Resolution: ${display.width}x${display.height}")
+
+            val windowsOnDisplay = windowsByDisplay[display.displayId] ?: emptyList()
+            if (windowsOnDisplay.isEmpty()) {
+                sb.appendLine("No managed windows on this display")
+            } else {
+                sb.appendLine("Windows on this display:")
+                for (window in windowsOnDisplay) {
+                    sb.appendLine("- ${window.packageName} (${window.bounds})")
+                }
+            }
+        }
+
+        val logOutput = sb.toString()
+        Log.d(TAG, logOutput)
+        return logOutput
+    }
+
+    // Add this method to TilingManagerService.kt
+    fun forceRefreshAllDisplays() {
+        serviceScope.launch {
+            Log.d(TAG, "Forcing refresh of all displays")
+
+            // Clear all window info
+            windowInfoList.clear()
+
+            // Update windows list with less strict filtering
+            val windows = windows?.filterNotNull() ?: return@launch
+
+            Log.d(TAG, "Found ${windows.size} total windows")
+
+            val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            val displays = displayManager.displays
+
+            Log.d(TAG, "Detected ${displays.size} displays")
+            for (display in displays) {
+                Log.d(TAG, "Display ${display.displayId}: ${display.name}")
+
+                // For each display, try to apply a layout
+                applyTilingLayout(forceUpdate = true, displayId = display.displayId)
+            }
+        }
+    }
+
+    // Register a receiver for the force refresh command
+    val forceRefreshReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == "FORCE_REFRESH_DISPLAY") {
+                val displayId = intent.getIntExtra("display_id", -1)
+                if (displayId >= 0) {
+                    Log.d(TAG, "Force refreshing display: $displayId")
+                    serviceScope.launch {
+                        applyTilingLayout(forceUpdate = true, displayId = displayId)
+                    }
+                } else {
+                    forceRefreshAllDisplays()
+                }
+            }
+        }
+    }
+    LocalBroadcastManager.getInstance(this).registerReceiver(
+    forceRefreshReceiver,
+    IntentFilter("FORCE_REFRESH_DISPLAY")
+    )
 
     /**
      * Information about a window in the system.
@@ -706,7 +905,9 @@ class TilingManagerService : AccessibilityService() {
         val packageName: String,
         var bounds: Rect,
         val windowId: Int,
-        var needsRepositioning: Boolean = false
+        var displayId: Int = 0,
+        var needsRepositioning: Boolean = false,
+        var title: String = ""
     )
 
     /**
