@@ -71,13 +71,14 @@ class TilingManagerService : AccessibilityService() {
     private var layoutRefreshReceiver: BroadcastReceiver? = null
     private var windowActionReceiver: BroadcastReceiver? = null
     private var launchAppReceiver: BroadcastReceiver? = null
-
+    private var forceRefreshReceiver: BroadcastReceiver? = null
 
 
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "TilingManagerService created")
-// Register in onCreate()
+
+        // Register in onCreate()
         val debugReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (intent.action == "DEBUG_WINDOWS") {
@@ -115,8 +116,8 @@ class TilingManagerService : AccessibilityService() {
         tilingConfig = app.tilingConfiguration.value
 
         // Register for workspace switch commands
-        workspaceSwitchReceiver = CommandManager.registerForWorkspaceSwitchCommands(this) { index ->
-            switchWorkspace(index)
+        workspaceSwitchReceiver = CommandManager.registerForWorkspaceSwitchCommands(this) { index, displayId ->
+            switchWorkspace(index, displayId)
         }
 
         // Register for layout refresh commands
@@ -144,6 +145,27 @@ class TilingManagerService : AccessibilityService() {
         }
         val intentFilter = IntentFilter("LAUNCH_APP_IN_FREEFORM")
         registerReceiver(launchAppReceiver, intentFilter, RECEIVER_NOT_EXPORTED)
+
+        // Register for force refresh display commands
+        forceRefreshReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == "FORCE_REFRESH_DISPLAY") {
+                    val displayId = intent.getIntExtra("display_id", -1)
+                    if (displayId >= 0) {
+                        Log.d(TAG, "Force refreshing display: $displayId")
+                        serviceScope.launch {
+                            applyTilingLayout(forceUpdate = true, displayId = displayId)
+                        }
+                    } else {
+                        forceRefreshAllDisplays()
+                    }
+                }
+            }
+        }
+        LocalBroadcastManager.getInstance(this).registerReceiver(
+            forceRefreshReceiver as BroadcastReceiver,
+            IntentFilter("FORCE_REFRESH_DISPLAY")
+        )
 
         // Start monitoring windows
         isRunning = true
@@ -542,10 +564,7 @@ class TilingManagerService : AccessibilityService() {
     }
 
     private fun applyTilingLayout(forceUpdate: Boolean = false, displayId: Int = 0) {
-        Log.i(TAG, "<<< applyTilingLayout: Entered function for workspace $currentWorkspace on display $displayId >>>")
-
-        lastLayoutApplication = System.currentTimeMillis()
-
+        // Get the current workspace for this display
         val workspaceIndex = workspacesByDisplay[displayId] ?: 0
 
         Log.i(TAG, "<<< applyTilingLayout: Entered function for workspace $workspaceIndex on display $displayId >>>")
@@ -594,7 +613,14 @@ class TilingManagerService : AccessibilityService() {
 
         // Only clear the map if we're doing a full refresh
         if (forceUpdate) {
-            packageToLayoutMap.clear()
+            // Only clear mappings for windows on this display
+            val displaySpecificPackages = packageToLayoutMap.filterKeys {
+                windowInfoList.find { info -> info.packageName == it }?.displayId == displayId
+            }.keys
+
+            for (pkg in displaySpecificPackages.toList()) {
+                packageToLayoutMap.remove(pkg)
+            }
         }
 
         Log.d(TAG, "applyTilingLayout: Starting loop to resize windows...")
@@ -787,6 +813,10 @@ class TilingManagerService : AccessibilityService() {
             unregisterReceiver(launchAppReceiver)
         }
 
+        if (forceRefreshReceiver != null) {
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(forceRefreshReceiver!!)
+        }
+
         isRunning = false
         serviceScope.cancel()
     }
@@ -872,31 +902,12 @@ class TilingManagerService : AccessibilityService() {
                 Log.d(TAG, "Display ${display.displayId}: ${display.name}")
 
                 // For each display, try to apply a layout
-                applyTilingLayout(forceUpdate = true, displayId = display.displayId)
-            }
-        }
-    }
-
-    // Register a receiver for the force refresh command
-    val forceRefreshReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == "FORCE_REFRESH_DISPLAY") {
-                val displayId = intent.getIntExtra("display_id", -1)
-                if (displayId >= 0) {
-                    Log.d(TAG, "Force refreshing display: $displayId")
-                    serviceScope.launch {
-                        applyTilingLayout(forceUpdate = true, displayId = displayId)
-                    }
-                } else {
-                    forceRefreshAllDisplays()
+                withContext(Dispatchers.Main) {
+                    applyTilingLayout(forceUpdate = true, displayId = display.displayId)
                 }
             }
         }
     }
-    LocalBroadcastManager.getInstance(this).registerReceiver(
-    forceRefreshReceiver,
-    IntentFilter("FORCE_REFRESH_DISPLAY")
-    )
 
     /**
      * Information about a window in the system.
