@@ -1,25 +1,18 @@
-// File path: i3droid/app/build.gradle
-
 plugins {
     id 'com.android.application'
     id 'kotlin-android'
 }
 
 android {
-    namespace 'com.example.i3tilingmanager'
-    compileSdk 34
+    namespace 'com.i3droid'
+    compileSdk 35 // Android 15 is API level 35
 
     defaultConfig {
-        applicationId "com.example.i3tilingmanager"
-        minSdk 24 // For Freeform window support (Android 7.0+)
-        targetSdk 34
+        applicationId "com.i3droid"
+        minSdk 34 // Minimum Android 14 for better compatibility
+        targetSdk 35 // Target Android 15
         versionCode 1
         versionName "1.0"
-
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        vectorDrawables {
-            useSupportLibrary true
-        }
     }
 
     buildTypes {
@@ -29,47 +22,22 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '17'
     }
     buildFeatures {
-        compose true
-    }
-    composeOptions {
-        kotlinCompilerExtensionVersion compose_version
-    }
-    packagingOptions {
-        resources {
-            excludes += '/META-INF/{AL2.0,LGPL2.1}'
-        }
+        viewBinding true
     }
 }
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
-    implementation 'androidx.activity:activity-compose:1.8.2'
-    implementation "androidx.compose.ui:ui:$compose_version"
-    implementation "androidx.compose.ui:ui-tooling-preview:$compose_version"
-    implementation "androidx.compose.material3:material3:1.2.0"
-    implementation "androidx.compose.material3:material3-window-size-class:1.2.0"
-    implementation "androidx.window:window:1.2.0"
-    implementation "androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0"
-    implementation "androidx.localbroadcastmanager:localbroadcastmanager:1.1.0"
-    implementation "androidx.compose.material3:material3:1.2.0"
-
-    // For device administrator features
-    implementation "androidx.work:work-runtime-ktx:2.9.0"
-    implementation 'androidx.core:core-ktx:1.12.0'  // For NotificationCompat
-    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
-    implementation 'androidx.core:core:1.12.0'  // For notifications
-    testImplementation 'junit:junit:4.13.2'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
-    androidTestImplementation "androidx.compose.ui:ui-test-junit4:$compose_version"
-    debugImplementation "androidx.compose.ui:ui-tooling:$compose_version"
-    debugImplementation "androidx.compose.ui:ui-test-manifest:$compose_version"
+    implementation 'androidx.activity:activity-ktx:1.8.2'
 }

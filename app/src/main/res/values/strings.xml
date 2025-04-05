@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">i3 Tiling Manager</string>
-    <string name="accessibility_service_description">This service manages application windows in free form mode to provide an i3-like tiling window management experience.</string>
+    <string name="app_name">i3droid</string>
+    <string name="search_apps">Search apps...</string>
+    <string name="settings">i3droid Settings</string>
 </resources>

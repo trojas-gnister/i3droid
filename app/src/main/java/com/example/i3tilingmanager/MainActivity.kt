@@ -1,174 +1,101 @@
-package com.example.i3tilingmanager
+package com.i3droid
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
-import android.provider.Settings
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.i3tilingmanager.service.TilingManagerService
-import com.example.i3tilingmanager.ui.screens.MainScreen
-import com.example.i3tilingmanager.ui.theme.I3TilingManagerTheme
-import com.example.i3tilingmanager.util.AccessibilityUtil
-import com.example.i3tilingmanager.util.CommandManager
-import com.example.i3tilingmanager.util.FreeformUtil
-import com.example.i3tilingmanager.viewmodel.MainViewModel
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.View
+import android.widget.LinearLayout
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+/**
+ * Main Activity that serves as the launcher's home screen.
+ * Handles gestures and key combinations to launch the app menu.
+ */
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var appLauncher: AppLauncher
+    private lateinit var rootLayout: LinearLayout
+    private lateinit var freeformWindowManager: FreeformWindowManager
+
+    // Gesture detection variables
+    private var startY: Float = 0f
+    private val SWIPE_THRESHOLD = 100
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            I3TilingManagerTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    val viewModel: MainViewModel = viewModel()
-                    val app = I3TilingManagerApplication.getInstance()
-                    
-                    MainContent(
-                        isFreeformEnabled = app.isFreeformEnabled.value,
-                        isAccessibilityEnabled = viewModel.isAccessibilityServiceEnabled.value,
-                        onEnableFreeform = { viewModel.enableFreeformMode() },
-                        onStartService = { startTilingService() }
-                    )
+        setContentView(R.layout.activity_main)
+
+        rootLayout = findViewById(R.id.root_layout)
+
+        // Initialize the app launcher and freeform window manager
+        appLauncher = AppLauncher(this)
+        freeformWindowManager = FreeformWindowManager(this)
+
+        // Set up touch listener to handle gestures
+        rootLayout.setOnTouchListener { _, event ->
+            handleTouchEvent(event)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Hide system UI for a more immersive experience
+        hideSystemUI()
+    }
+
+    private fun hideSystemUI() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).let { controller ->
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    private fun handleTouchEvent(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                // Store initial touch position
+                startY = event.y
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                // If there was a swipe up from the bottom, show the app launcher
+                val deltaY = startY - event.y
+                if (deltaY > SWIPE_THRESHOLD && startY > rootLayout.height - 200) {
+                    showAppLauncher()
+                    return true
                 }
             }
         }
+        return false
     }
-    
-    private fun startTilingService() {
-        if (!AccessibilityUtil.isAccessibilityServiceEnabled(this, TilingManagerService::class.java)) {
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-            startActivity(intent)
-        }
-    }
-}
 
-@Composable
-fun MainContent(
-    isFreeformEnabled: Boolean,
-    isAccessibilityEnabled: Boolean,
-    onEnableFreeform: () -> Unit,
-    onStartService: () -> Unit
-) {
-
-    val context = LocalContext.current
-    Button(
-        onClick = {
-            CommandManager.refreshLayout(context)
-        }
-    ) {
-        Text("Force Apply Tiling")
-    }
-    if (!isFreeformEnabled || !isAccessibilityEnabled) {
-        SetupScreen(
-            isFreeformEnabled = isFreeformEnabled,
-            isAccessibilityEnabled = isAccessibilityEnabled,
-            onEnableFreeform = onEnableFreeform,
-            onStartService = onStartService
-        )
-    } else {
-        // Main application UI
-        MainScreen()
-    }
-}
-
-@Composable
-fun SetupScreen(
-    isFreeformEnabled: Boolean,
-    isAccessibilityEnabled: Boolean,
-    onEnableFreeform: () -> Unit,
-    onStartService: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = "i3 Tiling Window Manager for Android",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        
-        Spacer(modifier = Modifier.height(32.dp))
-        
-        SetupCard(
-            title = "Enable Freeform Mode",
-            description = "Freeform mode allows windows to be resized and positioned freely.",
-            isEnabled = isFreeformEnabled,
-            buttonText = "Enable Freeform Mode",
-            onClick = onEnableFreeform
-        )
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        SetupCard(
-            title = "Enable Accessibility Service",
-            description = "This service is required to manage windows and applications.",
-            isEnabled = isAccessibilityEnabled,
-            buttonText = "Open Accessibility Settings",
-            onClick = onStartService
-        )
-    }
-}
-
-@Composable
-fun SetupCard(
-    title: String,
-    description: String,
-    isEnabled: Boolean,
-    buttonText: String,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium
-                )
-                
-                Spacer(modifier = Modifier.weight(1f))
-                
-                if (isEnabled) {
-                    Text(
-                        text = "Enabled",
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodyMedium
-            )
-            
-            if (!isEnabled) {
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                Button(onClick = onClick) {
-                    Text(text = buttonText)
-                }
+    private fun showAppLauncher() {
+        lifecycleScope.launch {
+            appLauncher.show { appInfo ->
+                // Launch the selected app in freeform mode
+                freeformWindowManager.launchAppInFreeformMode(appInfo.packageName, appInfo.activityName)
             }
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // Listen for Alt+Space key combination to show app launcher (like dmenu)
+        if (keyCode == KeyEvent.KEYCODE_SPACE && event?.isAltPressed == true) {
+            showAppLauncher()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onBackPressed() {
+        // Prevent back button from exiting the launcher
+        showAppLauncher()
     }
 }
