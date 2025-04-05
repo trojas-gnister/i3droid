@@ -5,8 +5,12 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.util.DisplayMetrics
-import android.util.Log // <-- Add this import
+import android.util.Log
 import android.view.WindowManager
 
 /**
@@ -15,22 +19,111 @@ import android.view.WindowManager
  */
 class FreeformWindowManager(private val context: Context) {
 
-    // Constants for window sizes
-    private val DEFAULT_WIDTH_DP = 360
-    private val DEFAULT_HEIGHT_DP = 640
-    private val MARGIN_DP = 25
+    companion object {
+        private const val TAG = "FreeformWM"
+
+        // Constants for window sizes
+        private const val DEFAULT_WIDTH_DP = 360
+        private const val DEFAULT_HEIGHT_DP = 640
+        private const val MARGIN_DP = 25
+    }
 
     // Keep track of open windows to manage positioning
     private val openWindows = mutableListOf<Rect>()
+
+    /**
+     * Check if the device supports freeform mode
+     */
+    fun hasFreeformSupport(): Boolean {
+        // Check if on API 24 (Nougat) or higher
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
+
+        return try {
+            // Check if the device has the freeform feature flag
+            val hasFreeformFeature = context.packageManager.hasSystemFeature(
+                "android.software.freeform_window_management"
+            )
+
+            // Check if enable_freeform_support is enabled in Global settings
+            val freeformEnabled = Settings.Global.getInt(
+                context.contentResolver,
+                "enable_freeform_support",
+                0
+            ) != 0
+
+            // On Nougat, also check force_resizable_activities
+            val forceResizable = if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.N_MR1) {
+                Settings.Global.getInt(
+                    context.contentResolver,
+                    "force_resizable_activities",
+                    0
+                ) != 0
+            } else false
+
+            hasFreeformFeature || freeformEnabled || forceResizable
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking freeform support", e)
+            false
+        }
+    }
+
+    /**
+     * Start the freeform hack to enable freeform mode
+     */
+    fun startFreeformHack() {
+        if (!hasFreeformSupport()) {
+            Log.e(TAG, "Freeform mode not supported on this device")
+            return
+        }
+
+        if (FreeformHelper.getInstance().isFreeformActive) {
+            Log.d(TAG, "Freeform hack already active")
+            return
+        }
+
+        val intent = Intent(context, InvisibleFreeformActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        }
+
+        try {
+            // Position the invisible activity in the corner
+            val options = ActivityOptions.makeBasic()
+            val display = (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
+                .defaultDisplay
+            val metrics = DisplayMetrics()
+            display.getMetrics(metrics)
+
+            // Place activity in bottom-right corner
+            val bounds = Rect(
+                metrics.widthPixels - 1,
+                metrics.heightPixels - 1,
+                metrics.widthPixels,
+                metrics.heightPixels
+            )
+            options.launchBounds = bounds
+
+            context.startActivity(intent, options.toBundle())
+            Log.d(TAG, "Started freeform hack activity")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start freeform hack", e)
+        }
+    }
+
+    /**
+     * Stop the freeform hack
+     */
+    fun stopFreeformHack() {
+        val intent = Intent(InvisibleFreeformActivity.ACTION_FINISH)
+        context.sendBroadcast(intent)
+    }
 
     /**
      * Convert dp to pixels
      */
     private fun dpToPx(dp: Int): Int {
         val displayMetrics = context.resources.displayMetrics
-        // Use density directly for more standard conversion
         val px = (dp * displayMetrics.density).toInt()
-        Log.d("FreeformWM", "dpToPx: $dp dp -> $px px (density=${displayMetrics.density})")
         return px
     }
 
@@ -41,46 +134,72 @@ class FreeformWindowManager(private val context: Context) {
      * @param activityName Activity name of the app to launch
      */
     fun launchAppInFreeformMode(packageName: String, activityName: String) {
-        Log.d("FreeformWM", "--- Attempting to launch $packageName/$activityName ---")
+        Log.d(TAG, "Attempting to launch $packageName/$activityName in freeform mode")
+
+        if (!hasFreeformSupport()) {
+            Log.e(TAG, "Freeform mode not supported on this device")
+            return
+        }
+
+        // First ensure freeform hack is active
+        if (!FreeformHelper.getInstance().isFreeformActive) {
+            startFreeformHack()
+            // Wait a bit for the freeform hack to initialize
+            Handler(Looper.getMainLooper()).postDelayed({
+                actuallyLaunchApp(packageName, activityName)
+            }, 300)
+        } else {
+            actuallyLaunchApp(packageName, activityName)
+        }
+    }
+
+    private fun actuallyLaunchApp(packageName: String, activityName: String) {
         // Create intent to launch the app
         val intent = Intent().apply {
             component = ComponentName(packageName, activityName)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+            action = Intent.ACTION_MAIN
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+            // Critical flags for freeform mode
+            addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                addFlags(Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+            }
         }
 
         // Create a bounds rectangle for the app window
         val windowRect = getNextWindowBounds()
-        Log.d("FreeformWM", "Calculated launchBounds: $windowRect")
-
 
         if (windowRect.width() <= 0 || windowRect.height() <= 0) {
-            Log.e("FreeformWM", "Calculated bounds are invalid! Not launching.")
-            return // Prevent launching with invalid bounds
+            Log.e(TAG, "Calculated bounds are invalid: $windowRect")
+            return
         }
 
         // Create activity options with bounds
         val options = ActivityOptions.makeBasic()
 
-        // Set the launch bounds (for freeform mode)
+        // FIXED: Don't try to use reflection to set windowing mode
+        // Instead, rely solely on setting bounds which works better across Android versions
+
+        // Set the launch bounds
         options.launchBounds = windowRect
 
         // Start the activity with options
         try {
-            Log.d("FreeformWM", "Calling startActivity with options...")
             context.startActivity(intent, options.toBundle())
-            Log.d("FreeformWM", "startActivity called successfully.")
+            Log.d(TAG, "Successfully launched app in freeform mode")
 
-            // Add to list of open windows *only after successful call*
+            // Add to list of open windows
             openWindows.add(windowRect)
 
-            // Prevent list from growing too large
+            // Keep list at reasonable size
             if (openWindows.size > 10) {
                 openWindows.removeAt(0)
             }
         } catch (e: Exception) {
-            Log.e("FreeformWM", "Error launching activity: ${e.message}", e)
+            Log.e(TAG, "Error launching activity in freeform mode", e)
         }
-        Log.d("FreeformWM", "--- Launch attempt finished ---")
     }
 
     /**
@@ -88,50 +207,32 @@ class FreeformWindowManager(private val context: Context) {
      * Uses a cascading layout pattern
      */
     private fun getNextWindowBounds(): Rect {
-        Log.d("FreeformWM", "Calculating next window bounds...")
-        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val metrics = DisplayMetrics()
-        // It's generally safer to get metrics from the default display via WindowManager
-        // on newer APIs, but context.resources.displayMetrics often works too.
-        // Let's stick to context resources for now as it was in the original code.
-        // windowManager.defaultDisplay.getMetrics(metrics) // Alternative
         val displayMetrics = context.resources.displayMetrics
-        Log.d("FreeformWM", "Screen Metrics: width=${displayMetrics.widthPixels}, height=${displayMetrics.heightPixels}, density=${displayMetrics.density}, xdpi=${displayMetrics.xdpi}")
-
 
         val screenWidth = displayMetrics.widthPixels
         val screenHeight = displayMetrics.heightPixels
 
         val windowWidth = dpToPx(DEFAULT_WIDTH_DP)
         val windowHeight = dpToPx(DEFAULT_HEIGHT_DP)
-        Log.d("FreeformWM", "Target window size: width=$windowWidth px, height=$windowHeight px")
-
 
         // Ensure calculated size isn't larger than screen
-        val finalWindowWidth = windowWidth.coerceAtMost(screenWidth)
-        val finalWindowHeight = windowHeight.coerceAtMost(screenHeight)
-        if (windowWidth > screenWidth || windowHeight > screenHeight) {
-            Log.w("FreeformWM", "Calculated window size ($windowWidth x $windowHeight) larger than screen ($screenWidth x $screenHeight). Coercing.")
-        }
+        val finalWindowWidth = windowWidth.coerceAtMost(screenWidth - 100)
+        val finalWindowHeight = windowHeight.coerceAtMost(screenHeight - 100)
 
         // Calculate offset for cascading windows
         val marginPx = dpToPx(MARGIN_DP)
-        Log.d("FreeformWM", "Cascade margin: $marginPx px")
 
-        // Ensure we have space to calculate offset, avoid division by zero or negative modulo
-        val maxOffsetX = screenWidth - finalWindowWidth
-        val maxOffsetY = screenHeight - finalWindowHeight
+        val maxOffsetX = (screenWidth - finalWindowWidth).coerceAtLeast(1)
+        val maxOffsetY = (screenHeight - finalWindowHeight).coerceAtLeast(1)
 
-        val offsetX = if (maxOffsetX > 0) (openWindows.size * marginPx) % maxOffsetX else 0
-        val offsetY = if (maxOffsetY > 0) (openWindows.size * marginPx) % maxOffsetY else 0
-        Log.d("FreeformWM", "Calculated offset: x=$offsetX, y=$offsetY (based on ${openWindows.size} open windows)")
-
+        val offsetX = (openWindows.size * marginPx) % maxOffsetX
+        val offsetY = (openWindows.size * marginPx) % maxOffsetY
 
         return Rect(
             offsetX,
             offsetY,
-            (offsetX + finalWindowWidth).coerceAtMost(screenWidth), // Ensure right edge doesn't exceed screen
-            (offsetY + finalWindowHeight).coerceAtMost(screenHeight) // Ensure bottom edge doesn't exceed screen
+            offsetX + finalWindowWidth,
+            offsetY + finalWindowHeight
         )
     }
 
@@ -139,7 +240,6 @@ class FreeformWindowManager(private val context: Context) {
      * Reset the window tracking list
      */
     fun resetWindows() {
-        Log.d("FreeformWM", "Resetting open windows list.")
         openWindows.clear()
     }
 }

@@ -1,9 +1,11 @@
 package com.i3droid
 
+import android.app.AlertDialog
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.View
 import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
@@ -46,6 +48,33 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // Hide system UI for a more immersive experience
         hideSystemUI()
+
+        // Check if freeform mode is supported
+        checkFreeformSupport()
+
+        // Pre-start the freeform hack to make app launches faster
+        if (freeformWindowManager.hasFreeformSupport()) {
+            // Delay this slightly to avoid issues during activity startup
+            Handler(Looper.getMainLooper()).postDelayed({
+                freeformWindowManager.startFreeformHack()
+            }, 500)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Make sure to clean up
+        freeformWindowManager.stopFreeformHack()
+    }
+
+    private fun checkFreeformSupport() {
+        if (!freeformWindowManager.hasFreeformSupport()) {
+            AlertDialog.Builder(this)
+                .setTitle("Freeform Mode Not Available")
+                .setMessage("Your device does not have freeform mode enabled. Please enable Developer Options and then enable 'Force activities to be resizable' and 'Enable freeform windows'.")
+                .setPositiveButton("OK", null)
+                .show()
+        }
     }
 
     private fun hideSystemUI() {
